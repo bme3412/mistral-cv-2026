@@ -1,0 +1,310 @@
+# MISTRAL INTERACTIVE RESUME — Cursor Instructions
+
+## Project Overview
+An interactive, AI-powered resume experience built as a single-page Next.js app,
+deployed to Vercel. The app showcases a career timeline with N dynamic chapters,
+an AI chat agent powered by the Mistral Agents API, on-demand image generation,
+OCR-based resume parsing, and semantic search over resume content — all using
+Mistral's API surface.
+
+**Target audience**: Mistral AI hackathon reviewers (Feb 28 – Mar 1, 2026).
+This is a hackathon APPLICATION, so the resume link must be impressive, reliable,
+and demonstrate deep fluency with Mistral's APIs.
+
+---
+
+## Tech Stack
+- **Framework**: Next.js 14+ (App Router)
+- **Language**: TypeScript (strict mode)
+- **Styling**: Tailwind CSS + shadcn/ui components
+- **AI SDK**: `@mistralai/mistralai` (official Mistral TypeScript SDK)
+- **Deployment**: Vercel
+- **Fonts**: Use distinctive Google Fonts — avoid Inter/Roboto/Arial. Consider:
+  editorial serif (e.g., Playfair Display, Instrument Serif) for headings,
+  clean sans (e.g., Satoshi, General Sans via Fontshare, or DM Sans) for body.
+
+---
+
+## Architecture Principles
+
+### 1. Dynamic Chapter System
+- Resume content lives in `src/data/chapters.ts` as a typed array
+- The number of chapters is NOT hardcoded — all components map over the array
+- Each chapter has: id, title, subtitle, dateRange, bulletPoints[], imagePrompt, tags[]
+- New chapters are added by appending to the array — zero code changes elsewhere
+- The timeline, chat agent context, embeddings, and image prompts all derive from this single source of truth
+
+### 2. Mistral Agent as the Core Brain
+- A single Mistral Agent is created server-side with ALL resume data as instructions
+- The agent has these built-in tools enabled:
+  - `ImageGenerationTool` (FLUX1.1 [pro] Ultra via Mistral)
+  - `WebSearchTool` (grounded web search)
+  - `CodeInterpreterTool` (live code execution)
+- Conversations are managed via the Mistral Conversations API (beta)
+  - `mistral.beta.conversations.start()` to begin
+  - `mistral.beta.conversations.append()` to continue
+  - Conversation ID is stored client-side for session continuity
+- The agent's system instructions are dynamically built from `chapters.ts`
+
+### 3. API Routes (all under `src/app/api/`)
+| Route | Purpose | Mistral API Used |
+|-------|---------|-----------------|
+| `POST /api/agent` | Start or continue a conversation with the resume agent | Agents API + Conversations API (beta) |
+| `POST /api/generate-image` | Trigger image generation for a specific chapter | Agent with ImageGenerationTool |
+| `POST /api/ocr` | Parse an uploaded Word/PDF resume via OCR | `mistral-ocr-2505` |
+| `POST /api/search` | Semantic search over resume content | `mistral-embed` embeddings |
+
+### 4. Frontend Layout
+- **Single scrollable page** with these sections (top to bottom):
+  1. **Hero**: Name, tagline, animated intro. Minimal, editorial feel.
+  2. **Timeline**: Vertical timeline with chapter cards. Each card has:
+     - Title, date range, subtitle
+     - Bullet points (expandable)
+     - "Generate Visual" button → triggers image gen, shows result inline
+     - Tags/skills as pills
+  3. **Chat Widget**: Floating overlay (bottom-right), expandable.
+     Opens into a full chat interface with streaming responses.
+     Pre-seeded with suggested questions like:
+     "Why is Brendan a great fit for this hackathon?"
+     "Tell me about his AI engineering transition"
+     "What's his most impressive investment?"
+  4. **Semantic Search**: A search bar (could be in the hero or as a section)
+     that lets visitors type a query and find the most relevant resume content.
+  5. **Footer**: Links, credits, "Built with Mistral APIs" badge.
+
+---
+
+## Mistral SDK Usage Patterns
+
+### Client Initialization
+```typescript
+import { Mistral } from "@mistralai/mistralai";
+
+const mistral = new Mistral({
+  apiKey: process.env.MISTRAL_API_KEY!,
+});
+```
+
+### Creating the Resume Agent (do this once, cache the agent ID)
+```typescript
+const agent = await mistral.beta.agents.create({
+  model: "mistral-medium-latest",
+  name: "Brendan's Resume Agent",
+  description: "An AI agent representing Brendan's professional experience",
+  instructions: buildAgentInstructions(), // Built from chapters.ts
+  tools: [
+    { type: "web_search" },
+    { type: "image_generation" },
+    { type: "code_interpreter" },
+  ],
+});
+// Store agent.id for reuse
+```
+
+### Starting a Conversation
+```typescript
+const conversation = await mistral.beta.conversations.start({
+  agentId: agentId,
+  inputs: [
+    {
+      role: "user",
+      content: "Tell me about Brendan's experience with AI",
+    },
+  ],
+  store: true, // Persist server-side
+});
+```
+
+### Continuing a Conversation
+```typescript
+const response = await mistral.beta.conversations.append({
+  conversationId: conversationId,
+  inputs: [
+    {
+      role: "user",
+      content: userMessage,
+    },
+  ],
+});
+```
+
+### Streaming a Conversation
+```typescript
+const stream = await mistral.beta.conversations.startStream({
+  agentId: agentId,
+  inputs: [{ role: "user", content: userMessage }],
+});
+
+for await (const event of stream) {
+  // Forward SSE chunks to frontend
+}
+```
+
+### Image Generation (via Agent Tool)
+When the agent decides to generate an image, the response will contain a
+`ToolFileChunk` with a `file_id`. Download it:
+```typescript
+import { ToolFileChunk } from "@mistralai/mistralai/models";
+
+for (const chunk of response.outputs[response.outputs.length - 1].content) {
+  if (chunk.type === "tool_file") {
+    const fileBytes = await mistral.files.download({ fileId: chunk.file_id });
+    // Convert to base64 or serve as image
+  }
+}
+```
+
+### OCR (Resume Parsing)
+```typescript
+// Upload the file first
+const uploadedFile = await mistral.files.upload({
+  file: resumeFileStream,
+});
+
+// Then use OCR
+const ocrResult = await mistral.ocr.process({
+  model: "mistral-ocr-2505",
+  document: {
+    type: "file_id",
+    fileId: uploadedFile.id,
+  },
+});
+```
+
+### Embeddings (Semantic Search)
+```typescript
+// Generate embeddings for all chapter content
+const embeddings = await mistral.embeddings.create({
+  model: "mistral-embed",
+  inputs: chapters.map(ch => ch.bulletPoints.join(" ")),
+});
+
+// Generate embedding for search query
+const queryEmbedding = await mistral.embeddings.create({
+  model: "mistral-embed",
+  inputs: [searchQuery],
+});
+
+// Compute cosine similarity to find best matches
+```
+
+---
+
+## File-by-File Guidance
+
+### `src/data/chapters.ts`
+- Export a `Chapter[]` array and the `Chapter` type
+- Each chapter: { id, title, subtitle, dateRange, bulletPoints, imagePrompt, tags, order }
+- `imagePrompt` is a pre-written, detailed prompt for FLUX image generation
+- Keep `order` as a number for sorting — allows reordering without array position
+- Start with 2-3 placeholder chapters; the real content will be filled in later
+
+### `src/lib/mistral.ts`
+- Singleton Mistral client
+- Export helper functions: `getMistralClient()`, `getOrCreateAgent()`
+- Agent creation should be idempotent — check if agent exists before creating
+- Cache agent ID in a module-level variable (or use environment variable)
+
+### `src/lib/agent.ts`
+- `buildAgentInstructions()` — reads chapters.ts and constructs a rich system prompt
+- Include personality guidance: professional but warm, knowledgeable about finance + AI
+- Include explicit instructions for when to use tools (image gen, web search, code)
+
+### `src/lib/embeddings.ts`
+- `generateChapterEmbeddings()` — creates and caches embeddings for all chapters
+- `semanticSearch(query, topK)` — returns top K most relevant chapters
+- Use cosine similarity for ranking
+- Cache embeddings in memory (they don't change between deploys)
+
+### `src/components/Timeline.tsx`
+- Maps over chapters array
+- Renders alternating left/right cards on a vertical line
+- Animated scroll-in (use Intersection Observer or framer-motion)
+- Each card renders a `TimelineChapter` component
+
+### `src/components/TimelineChapter.tsx`
+- Receives a single Chapter object
+- Shows title, date range, expandable bullet points
+- "Generate Visual" button with loading state → calls /api/generate-image
+- Once image is generated, displays it with a fade-in animation
+- Tags rendered as shadcn Badge components
+
+### `src/components/ChatWidget.tsx`
+- Floating button (bottom-right) that expands into a chat panel
+- Manages conversation state (conversationId, messages[])
+- Sends messages to /api/agent, handles streaming responses
+- Pre-populated suggested questions as clickable chips
+- Shows when agent is using tools (typing indicator with tool name)
+- Markdown rendering for responses (use react-markdown)
+
+### `src/components/Hero.tsx`
+- Full-viewport hero section
+- Name, title/tagline, brief intro
+- Subtle animated background (CSS gradient mesh or geometric pattern)
+- Scroll indicator (animated chevron)
+- "Built with Mistral" badge
+
+### `src/components/SemanticSearch.tsx`
+- Search input with debounced API calls
+- Results displayed as highlighted chapter excerpts
+- Shows relevance score
+- Clicking a result scrolls to that chapter in the timeline
+
+---
+
+## Styling Guidelines (Tailwind + shadcn/ui)
+
+### Theme
+- Dark mode primary (matches the AI/tech aesthetic)
+- Accent color: Mistral's orange (#FF7000) or a sophisticated amber
+- Background: Deep slate/charcoal, not pure black
+- Text: Off-white for body, bright white for headings
+- Cards: Subtle glass-morphism (backdrop-blur, border, low-opacity bg)
+
+### shadcn/ui Components to Install
+```bash
+npx shadcn@latest init
+npx shadcn@latest add button card badge input scroll-area sheet dialog tooltip avatar
+```
+
+### Typography
+- Headings: A distinctive serif or display font (import via next/font/google)
+- Body: A clean, modern sans-serif
+- Code/technical: JetBrains Mono or similar monospace
+- Use fluid type scaling (clamp-based responsive sizes)
+
+### Animations
+- Timeline cards: Fade + slide up on scroll
+- Chat widget: Smooth expand/collapse
+- Image generation: Shimmer placeholder → fade-in reveal
+- Hero: Subtle gradient animation or floating particles
+
+---
+
+## Environment Variables (.env.local)
+```
+MISTRAL_API_KEY=your_mistral_api_key_here
+MISTRAL_AGENT_ID=optional_cached_agent_id
+```
+
+---
+
+## Development Workflow
+1. `npm install` → installs all dependencies
+2. `cp .env.local.example .env.local` → add your Mistral API key
+3. `npm run dev` → starts Next.js dev server
+4. Build chapters in `src/data/chapters.ts` first
+5. Test agent creation via `/api/agent`
+6. Build timeline UI → connect image gen → add chat widget
+7. Add semantic search last (polish feature)
+
+---
+
+## Key Reminders
+- ALWAYS use the Agents API (beta) — not raw chat completions — for the main chat
+- ALWAYS stream responses for the chat widget (better UX)
+- Image generation is ASYNC — show loading states, handle timeouts
+- The chapter system must be completely dynamic (N chapters, no hardcoding)
+- Every API route should have proper error handling and typed responses
+- Use `export const runtime = 'edge'` on API routes where possible for Vercel performance
+- Test with `mistral-small-latest` during dev (cheaper), switch to `mistral-medium-latest` or `mistral-large-latest` for production
