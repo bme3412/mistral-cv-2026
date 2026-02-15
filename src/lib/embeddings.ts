@@ -38,10 +38,22 @@ async function getChapterEmbeddings(): Promise<ChapterEmbedding[]> {
     inputs: chapterTexts.map((ct) => ct.text),
   });
 
-  _embeddingsCache = chapterTexts.map((ct, i) => ({
-    ...ct,
-    embedding: response.data[i].embedding,
-  }));
+  const embeddings: ChapterEmbedding[] = [];
+  chapterTexts.forEach((ct, i) => {
+    const embedding = response.data[i]?.embedding;
+    if (Array.isArray(embedding) && embedding.length > 0) {
+      embeddings.push({
+        ...ct,
+        embedding,
+      });
+    }
+  });
+
+  if (embeddings.length === 0) {
+    throw new Error("No embeddings returned for chapter content");
+  }
+
+  _embeddingsCache = embeddings;
 
   console.log(
     `[Embeddings] Cached ${_embeddingsCache.length} chapter embeddings`
@@ -83,7 +95,10 @@ export async function semanticSearch(
     model: "mistral-embed",
     inputs: [query],
   });
-  const queryEmbedding = queryResponse.data[0].embedding;
+  const queryEmbedding = queryResponse.data[0]?.embedding;
+  if (!Array.isArray(queryEmbedding) || queryEmbedding.length === 0) {
+    throw new Error("No query embedding returned");
+  }
 
   // Score each chapter by cosine similarity
   const scored = chapterEmbeddings.map((ce) => ({

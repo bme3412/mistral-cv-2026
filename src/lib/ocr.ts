@@ -19,7 +19,11 @@ export async function parseResumeWithOCR(fileBuffer: Buffer, fileName: string) {
   const client = getMistralClient();
 
   // Upload the file to Mistral's file storage
-  const blob = new Blob([fileBuffer]);
+  const arrayBuffer = fileBuffer.buffer.slice(
+    fileBuffer.byteOffset,
+    fileBuffer.byteOffset + fileBuffer.byteLength
+  ) as ArrayBuffer;
+  const blob = new Blob([arrayBuffer]);
   const file = new File([blob], fileName);
 
   const uploadedFile = await client.files.upload({
@@ -33,7 +37,7 @@ export async function parseResumeWithOCR(fileBuffer: Buffer, fileName: string) {
   const ocrResult = await client.ocr.process({
     model: "mistral-ocr-2505",
     document: {
-      type: "file_id",
+      type: "file",
       fileId: uploadedFile.id,
     },
   });

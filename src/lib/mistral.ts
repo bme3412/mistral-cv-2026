@@ -194,7 +194,7 @@ export async function continueConversationStream(
 
   const stream = await client.beta.conversations.appendStream({
     conversationId,
-    conversationAppendRequest: {
+    conversationAppendStreamRequest: {
       inputs: userMessage,
     },
   });
@@ -212,8 +212,54 @@ export async function downloadAgentImage(
   const client = getMistralClient();
 
   const fileBytes = await client.files.download({ fileId });
-  // Convert the response to a base64 string
-  const arrayBuffer = await (fileBytes as Response).arrayBuffer();
-  const base64 = Buffer.from(arrayBuffer).toString("base64");
-  return `data:image/png;base64,${base64}`;
+  const value = fileBytes as any;
+  const isReadableStream =
+    value &&
+    typeof value === "object" &&
+    typeof value.getReader === "function";
+
+  let bytes: Buffer;
+  if (typeof value?.arrayBuffer === "function") {
+    const arrayBuffer = await value.arrayBuffer();
+    bytes = Buffer.from(arrayBuffer);
+  } else if (isReadableStream) {
+    const arrayBuffer = await new Response(
+      value as ReadableStream<Uint8Array>
+    ).arrayBuffer();
+    bytes = Buffer.from(arrayBuffer);
+  } else if (Buffer.isBuffer(value)) {
+    bytes = value;
+  } else if (value instanceof ArrayBuffer) {
+    bytes = Buffer.from(value);
+  } else if (ArrayBuffer.isView(value)) {
+    bytes = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  } else if (Buffer.isBuffer(value?.data)) {
+    bytes = value.data;
+  } else if (value?.data instanceof ArrayBuffer) {
+    bytes = Buffer.from(value.data);
+  } else if (
+    value?.data &&
+    typeof value.data === "object" &&
+    typeof value.data.getReader === "function"
+  ) {
+    const arrayBuffer = await new Response(
+      value.data as ReadableStream<Uint8Array>
+    ).arrayBuffer();
+    bytes = Buffer.from(arrayBuffer);
+  } else if (ArrayBuffer.isView(value?.data)) {
+    bytes = Buffer.from(
+      value.data.buffer,
+      value.data.byteOffset,
+      value.data.byteLength
+    );
+  } else if (typeof value === "string") {
+    if (value.startsWith("data:image/")) return value;
+    bytes = Buffer.from(value, "base64");
+  } else {
+    throw new Error(
+      `Unsupported image download payload: ${Object.prototype.toString.call(value)}`
+    );
+  }
+
+  return `data:image/png;base64,${bytes.toString("base64")}`;
 }

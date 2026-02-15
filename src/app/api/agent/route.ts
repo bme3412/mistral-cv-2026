@@ -7,6 +7,17 @@ import {
 } from "@/lib/mistral";
 import type { AgentRequest } from "@/types";
 
+function hasOutputContent(
+  output: unknown
+): output is { content: unknown | unknown[] } {
+  return (
+    !!output &&
+    typeof output === "object" &&
+    "content" in output &&
+    (output as any).content != null
+  );
+}
+
 function getToolFileId(chunk: unknown): string | undefined {
   const c = chunk as any;
   return (
@@ -106,46 +117,56 @@ export async function POST(req: NextRequest) {
     // Extract the assistant's response content
     // The Conversations API returns outputs as an array of entries
     const outputs = response.outputs || [];
+    const resolvedConversationId = response.conversationId || conversationId;
     let content = "";
     let imageUrl: string | undefined;
     let toolUsed: string | undefined;
 
     for (const output of outputs) {
-      if (output.content) {
-        for (const chunk of Array.isArray(output.content) ? output.content : [output.content]) {
-          if (typeof chunk === "string") {
-            content += chunk;
-          } else if (chunk.type === "text" && chunk.text) {
-            content += chunk.text;
-          } else if (chunk.type === "tool_file") {
-            // Agent generated an image
-            toolUsed = "image_generation";
-            const fileId = getToolFileId(chunk);
+      if (!hasOutputContent(output)) continue;
 
-            if (!fileId) {
-              console.warn("[Agent] tool_file chunk missing file id:", {
-                chunkType: (chunk as any)?.type,
-                chunkKeys: Object.keys(chunk as object),
-              });
-              continue;
-            }
+      for (const chunk of Array.isArray(output.content)
+        ? output.content
+        : [output.content]) {
+        if (typeof chunk === "string") {
+          content += chunk;
+        } else if ((chunk as any)?.type === "text" && (chunk as any)?.text) {
+          content += (chunk as any).text;
+        } else if ((chunk as any)?.type === "tool_file") {
+          // Agent generated an image
+          toolUsed = "image_generation";
+          const fileId = getToolFileId(chunk);
 
-            try {
-              const client = getMistralClient();
-              const fileData = await client.files.download({
-                fileId,
-              });
-              imageUrl = await toImageDataUrl(fileData);
-            } catch (err) {
-              console.error("[Agent] Failed to download generated image:", err);
-            }
+          if (!fileId) {
+            console.warn("[Agent] tool_file chunk missing file id:", {
+              chunkType: (chunk as any)?.type,
+              chunkKeys: Object.keys(chunk as object),
+            });
+            continue;
+          }
+
+          try {
+            const client = getMistralClient();
+            const fileData = await client.files.download({
+              fileId,
+            });
+            imageUrl = await toImageDataUrl(fileData);
+          } catch (err) {
+            console.error("[Agent] Failed to download generated image:", err);
           }
         }
       }
     }
 
+    if (!resolvedConversationId) {
+      return NextResponse.json(
+        { error: "Conversation ID missing from response" },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({
-      conversationId: response.conversationId || response.id,
+      conversationId: resolvedConversationId,
       content: content || "I'm ready to tell you about Brendan's experience. What would you like to know?",
       imageUrl,
       toolUsed,

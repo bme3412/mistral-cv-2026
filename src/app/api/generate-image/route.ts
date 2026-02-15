@@ -3,6 +3,17 @@ import { getOrCreateAgent, getMistralClient } from "@/lib/mistral";
 import { getChapterById } from "@/data/chapters";
 import type { ImageGenRequest } from "@/types";
 
+function hasOutputContent(
+  output: unknown
+): output is { content: unknown | unknown[] } {
+  return (
+    !!output &&
+    typeof output === "object" &&
+    "content" in output &&
+    (output as any).content != null
+  );
+}
+
 function getToolFileId(chunk: unknown): string | undefined {
   const c = chunk as any;
   return (
@@ -112,27 +123,29 @@ export async function POST(req: NextRequest) {
     const outputs = response.outputs || [];
 
     for (const output of outputs) {
-      if (output.content) {
-        for (const chunk of Array.isArray(output.content) ? output.content : [output.content]) {
-          if (typeof chunk === "object" && chunk.type === "tool_file") {
-            const fileId = getToolFileId(chunk);
+      if (!hasOutputContent(output)) continue;
 
-            if (!fileId) {
-              console.warn("[ImageGen] tool_file chunk missing file id:", {
-                chunkType: (chunk as any)?.type,
-                chunkKeys: Object.keys(chunk as object),
-              });
-              continue;
-            }
+      for (const chunk of Array.isArray(output.content)
+        ? output.content
+        : [output.content]) {
+        if (typeof chunk === "object" && (chunk as any)?.type === "tool_file") {
+          const fileId = getToolFileId(chunk);
 
-            try {
-              const fileData = await client.files.download({
-                fileId,
-              });
-              imageUrl = await toImageDataUrl(fileData);
-            } catch (err) {
-              console.error("[ImageGen] Failed to download:", err);
-            }
+          if (!fileId) {
+            console.warn("[ImageGen] tool_file chunk missing file id:", {
+              chunkType: (chunk as any)?.type,
+              chunkKeys: Object.keys(chunk as object),
+            });
+            continue;
+          }
+
+          try {
+            const fileData = await client.files.download({
+              fileId,
+            });
+            imageUrl = await toImageDataUrl(fileData);
+          } catch (err) {
+            console.error("[ImageGen] Failed to download:", err);
           }
         }
       }
