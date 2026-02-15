@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Cormorant_Garamond, Manrope, JetBrains_Mono } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
 const fontHeading = Cormorant_Garamond({
@@ -44,7 +45,10 @@ export default function RootLayout({
       lang="en"
       className={`dark ${fontHeading.variable} ${fontBody.variable} ${fontMono.variable}`}
     >
-      <body className="font-sans noise">{children}</body>
+      <body className="font-sans noise">
+        {children}
+        <Analytics />
+      </body>
     </html>
   );
 }
