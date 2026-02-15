@@ -32,7 +32,7 @@ export default function Home() {
           <div className="flex items-center gap-4">
             {/* TODO: Add your links */}
             <a
-              href="https://github.com/tone2412"
+              href="https://github.com/bme3412/mistral-cv-2026"
               target="_blank"
               rel="noreferrer noopener"
               className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors"
